@@ -1,0 +1,90 @@
+#!/bin/bash
+
+export_events() {
+    local user_name
+
+    user_name=$(whiptail --title "Inserisci Nome Utente" --inputbox "Inserisci il nome dell'utente:" 10 60 3>&1 1>&2 2>&3)
+
+    if [ $? -eq 1 ]; then
+        whiptail --title "Messaggio" --msgbox "Operazione annullata" 10 50
+        return 1
+    fi
+
+    local query="COPY (SELECT e.* FROM calendar.events e
+      JOIN calendar.calendars c ON e.calendar_id = c.calendar_id
+      WHERE c.user_id = '$user_name') TO '/tmp/risultati.csv' WITH CSV HEADER;"
+
+    su - postgres -c "psql webtop5 -c \"$query\""
+    whiptail --title "Messaggio" --msgbox "Query eseguita e risultati esportati in /tmp/risultati.csv" 10 50
+}
+
+
+export_events_by_user() {
+    local user_name="$1"
+
+    su - postgres -c "psql webtop5 -c \"COPY (SELECT e.* FROM calendar.events e
+      JOIN calendar.calendars c ON e.calendar_id = c.calendar_id
+      WHERE c.user_id = '$user_name') TO '/tmp/risultati.csv' WITH CSV HEADER;\""
+
+    whiptail --title "Messaggio" --msgbox "Operazione eseguita. Risultati esportati in /tmp/risultati.csv" 10 50
+}
+
+get_user_id() {
+    local result
+    result=$(su - postgres -c "psql webtop5 -c \"SELECT calendar_id, user_id, name FROM calendar.calendars;\"" | grep -v "rows" | sort -n -k 1,1 | tail -n +4)
+
+    declare -A calendar_user_ids
+    while IFS='|' read -r calendar_id user_id _; do
+        calendar_user_ids["$calendar_id"]="$user_id"
+    done <<< "$result"
+
+    IFS=$'\n'
+    entries=()
+    for calendar_id in "${!calendar_user_ids[@]}"; do
+        entries+=( "$calendar_id" "${calendar_user_ids[$calendar_id]}" )
+    done
+    unset IFS
+
+    choice=$(whiptail --title "Elenco Calendari" --menu "Scegli un calendario:" 20 60 10 "${entries[@]}" 3>&1 1>&2 2>&3)
+
+    if [ $? -eq 0 ]; then
+        selected_user_id="${calendar_user_ids[$choice]}"
+        whiptail --title "User ID e Calendar ID" --msgbox "Calendar ID: $choice\nUser ID: $selected_user_id" 10 50
+        export_events_by_user $selected_user_id
+
+    else
+        whiptail --title "Messaggio" --msgbox "Operazione annullata" 10 50
+    fi
+}
+
+whiptail --title "Esporta elementi di WebTOP" --yesno --defaultno "Vuoi avviare il programma?" 8 78
+
+exitstatus=$?
+if [ "$exitstatus" = 0 ]; then
+    status="open"  # Variabile di controllo per il ciclo
+
+    while [ "$status" = "open" ]; do
+        choice=$(whiptail --title "Menu" --menu "Scegli l'operazione" 16 78 5 \
+            "Opzione 1)" "Esporta in base all'utente." \
+            "Opzione 2)" "Esporta oggetto in base al nome utente." \
+            "Opzione 3)" "Esci dal programma." 3>&2 2>&1 1>&3)
+
+        case "$choice" in
+            "Opzione 1)")
+                whiptail --title "Esporta WebTOP" --msgbox "Selezionato 1" 10 50
+                get_user_id
+                ;;
+            "Opzione 2)")
+                whiptail --title "Esporta WebTOP" --msgbox "Selezionato 2" 10 50
+                export_events
+                ;;
+            *)
+                whiptail --title "Esporta WebTOP" --msgbox "Uscita dal programma." 10 50
+                status="closed"  # Chiude il ciclo
+                ;;
+        esac
+    done
+else
+    whiptail --title "Esporta WebTOP" --msgbox "Non avviato il programma." 8 78
+    exit
+fi
